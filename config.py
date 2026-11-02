@@ -1,0 +1,27 @@
+# config.py  -- all times in microseconds (µs)
+
+NUM_WORKERS = 8
+LOCAL_HIT_PROB = 0.20
+LOCAL_TIME = 0.85
+REMOTE_CPU_TIME = 2.3
+RDMA_FETCH_TIME = 3.0
+
+SIM_DURATION = 200_000
+WARMUP = 20_000
+SEED = 42
+
+CONTEXT_SWITCH = 0.02
+FAULT_SPLIT = 0.5
+
+QP_SERVICE = 1.0
+LINK_TIME = 0.5
+NET_LATENCY = RDMA_FETCH_TIME - QP_SERVICE - LINK_TIME
+
+# Page-cache model (used only when USE_CACHE is True)
+USE_CACHE = False
+NUM_PAGES = 100_000
+CACHE_FRACTION = 0.20
+ZIPF_S = 0.0
+
+# Fixed pool of unithreads (the paper pre-allocates 131,072)
+MAX_INFLIGHT = 4096
