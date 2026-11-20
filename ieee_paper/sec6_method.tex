@@ -1,0 +1,84 @@
+\section{Experimental Method}
+\label{sec:method}
+
+\subsection{Load generation and measurement}
+Request arrivals follow a Poisson process whose rate equals the offered load. We deliberately use open-loop arrivals: a closed-loop client slows its request rate whenever the system slows down and thereby masks queueing delay, which is precisely what we want to observe \cite{leverich}. Each simulation run covers 200~ms of simulated time. The first 20~ms serve as a warm-up period and are excluded from all measurements, leaving a 180~ms measurement window. At 1.5~MRPS the window captures roughly 270{,}000 requests; at 0.5~MRPS, about 90{,}000.
+
+\emph{Latency} for a request is defined as its completion time minus its arrival time, capturing everything: queueing, processor work, context switches, and the page-fetch wait. Percentiles are computed with linear interpolation over requests that both arrived after the warm-up and completed before the run ended. \emph{Throughput} is the count of completions inside the measurement window divided by the window length. A throughput value equal to the offered load means the system kept up; we treat such values as lower bounds on capacity and mark them in every table.
+
+One limitation of this procedure is worth flagging. When the system is overloaded, requests that are still in queue at the end of the run have no completion time and are silently excluded from the latency sample. Latency values reported above capacity therefore understate the true delay and vary with the simulated duration. We include them to show where the saturation knee lies but do not interpret their absolute magnitude as a result.
+
+\subsection{Experiments}
+Table~\ref{tab:experiments} enumerates the experiments, the parameter each one varies, and the script and output file in the repository.\footnote{\url{https://github.com/Pradeepthi-P01/adios-simulation}} The main comparison runs the three policies (busy-wait, yield with RR dispatch, and yield with PF dispatch) at nine offered loads between 0.5 and 3.0~MRPS. All sweeps use the default parameters from Table~\ref{tab:params} except for the quantity under study.
+
+\begin{table}[t]
+\caption{Experiments and where to find them in the repository \texttt{adios-simulation}}
+\label{tab:experiments}
+\centering
+\footnotesize
+\begin{tabular}{p{2.5cm}p{2.6cm}p{2.0cm}}
+\toprule
+Experiment & Varied & Script \\
+\midrule
+Policy comparison & offered load 0.5--3.0 & \texttt{run\_experiments}, \texttt{plots} \\
+PF vs.\ RR & load 1.8--2.4, $t_q\in\{1,2\}$ & \texttt{pf\_vs\_rr} \\
+Hit-rate sweep & $h=0.1$--0.8 & \texttt{sweep\_hitrate} \\
+Switch-cost sweep & $t_s=0.02$--4~$\mu$s & \texttt{sweep\_switchcost} \\
+LRU cache + Zipf & skew $s$, cache size & \texttt{sweep\_cache} \\
+Adaptive evaluation & load 0.2--2.5, $t_s=0.02$--1.5~$\mu$s & \texttt{sweep\_adaptive} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All runs use the fixed seed 42, with one exception: the dispatch-rule comparison averages five seeds (1--5) because the effect of PF-aware dispatch is small and a single seed could easily be misleading. All other experiments are single runs. We did not compute confidence intervals; for that reason we describe differences of a few percent as small and stop short of calling them statistically significant.
+
+\subsection{Implementation of the worker loops}
+Algorithm~\ref{alg:workers} gives the logic of both worker types as implemented in the simulator. They differ in exactly one place: what the worker does between posting the fetch and completing the request. The busy-wait worker remains in that blocked state for the full fetch, while the yield worker pays a switch cost $t_s$, returns to its inbox, and may start other requests. Because the simulator is process-based, a ``fetch'' is itself a SimPy process that travels through the queue pair, the shared link, and the wire delay in sequence; in the yield system it deposits a resume message in the inbox of the issuing worker when it finishes.
+
+\begin{algorithm}[t]
+\caption{Worker behaviour in the simulator.}
+\label{alg:workers}
+\begin{algorithmic}[1]
+\small
+\Procedure{BusyWaitWorker}{}
+\Loop
+\State $r \gets$ next request from the central queue
+\If{$r$ hits local memory} \State run $t_L$
+\Else \State run $t_c/2$; \; \Call{Fetch}{$r$} and wait; \; run $t_c/2$
+\EndIf
+\State record completion of $r$
+\EndLoop
+\EndProcedure
+\Procedure{YieldWorker}{}
+\Loop
+\State $m \gets$ next message in inbox (resumptions first)
+\If{$m$ is a new request $r$}
+\If{$r$ hits} \State run $t_L$; \; record completion
+\ElsIf{adaptive $\land$ \Call{Uncontended}{}} \Comment{spin-wait}
+\State run $t_c/2$; \; \Call{Fetch}{$r$} and wait; \; run $t_c/2$; \; record completion
+\Else
+\State run $t_c/2$; \; start \Call{Fetch}{$r$} in background
+\State pay $t_s$ \Comment{yield}
+\EndIf
+\Else \Comment{page has arrived for $r$}
+\State pay $t_s$; \; run $t_c/2$; \; record completion of $r$
+\EndIf
+\EndLoop
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Reproducibility}
+All simulation parameters are defined as named constants in \texttt{config.py}. The scripts should be run in the order \texttt{run\_experiments}, \texttt{plots}, \texttt{pf\_vs\_rr}, \texttt{sweep\_hitrate}, \texttt{sweep\_switchcost}, and \texttt{sweep\_cache}; each writes a CSV file and a figure to the \texttt{results} directory. Tables and figures in this paper are produced directly from those CSV files by two helper scripts distributed with the paper source, so no number in the main text is typed by hand---except for the derived quantities, which follow from the equations in Section~\ref{sec:bounds}. With a fixed seed, every run is deterministic.
+
+\subsection{Corrections to our first version}
+Checking the simulator's output against the capacity bounds of Section~\ref{sec:bounds} revealed two measurement errors in an earlier version. Both are corrected in the results reported here.
+
+\emph{Throughput by arrival time.} The first version counted each request toward throughput at the moment it arrived, not when it completed. Near saturation, the growing backlog then inflated or deflated the apparent rate depending on where the measurement window ended. Switching to completion-time counting fixed this, and the busy-wait plateau stabilized at a constant 1.77~MRPS across all overloaded conditions.
+
+\emph{Unbounded in-flight requests.} In the original yield model any number of requests could be started and left half-finished simultaneously. Above the link limit the simulator then reported throughputs above 2.50~MRPS (2.56 at 2.8~MRPS offered, 2.60 at 3.0~MRPS), which is physically impossible when the link carries at most two fetches per microsecond and 80\% of requests need one. Capping the pool at $P = 4096$ eliminated the effect, and the yield plateau settled at 2.50~MRPS, matching Equation~\eqref{eq:llink}.
+
+Both errors would have inflated the apparent advantage of yielding at high load. We document them here because they illustrate why a plausible-looking graph still needs to be checked against an analytic bound.
+
+\subsection{Validation}
+We validate the simulator in three independent ways. First, at light load the measured median latency of 5.3~$\mu$s matches the expected $t_c + t_f$ exactly (Table~\ref{tab:main}). Second, the measured throughput plateaus are compared with the bounds from Equations~\eqref{eq:lbw}--\eqref{eq:lqp} across several hit rates and switch costs in Sections~\ref{sec:hit} and~\ref{sec:switch}. Third, the LRU cache with uniform access ($s = 0$) and a 20\% cache fraction must reproduce a 20\% hit rate, and it does (19.9\% in Table~\ref{tab:cache}).

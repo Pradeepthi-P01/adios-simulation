@@ -1,0 +1,232 @@
+\section{Results}
+\label{sec:results}
+Unless stated otherwise, the local hit probability is 20\%, the switch cost is 0.02~$\mu$s and all values come from the seed-42 runs described in Section~\ref{sec:method}. Latencies are in microseconds.
+
+\subsection{Throughput under increasing load}
+Figure~\ref{fig:tput} plots the carried throughput against the offered load. Up to 1.5~MRPS every policy carries the whole load. At 1.8~MRPS the busy-wait system already falls slightly short (1.77~MRPS) while the yield systems still carry 1.80. From there the curves separate. Busy-wait stays at 1.77~MRPS however much load is offered, which is 97.7\% of its bound $\Lambda_{bw}=1.81$~MRPS from Equation~\eqref{eq:lbw}. Yield follows the offered load up to 2.5~MRPS and then stays at 2.50~MRPS, which is its link bound from Equation~\eqref{eq:llink} to within 0.1\%. The ratio of the two plateaus is $2.497/1.772=1.41$. The two dispatch rules give identical throughput.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{tput}
+\caption{Carried throughput against offered load for the three policies. The dotted line shows carried equal to offered.}
+\label{fig:tput}
+\end{figure}
+
+\subsection{Tail latency}
+Figure~\ref{fig:p999} shows the 99.9th percentile of latency, and Table~\ref{tab:main} gives the full set of percentiles. At 0.5~MRPS the policies are indistinguishable (6.5 and 6.6~$\mu$s at P99.9), and the median is 5.30 versus 5.32~$\mu$s, a difference of 0.02~$\mu$s that comes from the two extra switches of a miss. As the load rises, the busy-wait tail grows first. At 1.0~MRPS the P99.9 is 8.7~$\mu$s against 7.7 for yield. At 1.5~MRPS it is 17.2 against 8.9~$\mu$s, a factor of 1.93, and the P99 is 13.1 against 7.8~$\mu$s (1.68). At 1.8~MRPS busy-wait is past its capacity and the P99.9 jumps to about 3{,}000~$\mu$s, while yield has 10.6~$\mu$s. If a service-level target of 20~$\mu$s at P99.9 is assumed, busy-wait can carry about 1.5~MRPS (26.7~$\mu$s at 1.6) and yield about 2.2~MRPS (18.1~$\mu$s), a factor of roughly 1.5 in usable load.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{p999}
+\caption{99.9th percentile latency against offered load (log scale). Values above each policy's capacity understate the true delay (Section~\ref{sec:method}).}
+\label{fig:p999}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{bars}
+\caption{Latency percentiles of the three policies at 1.0 and 1.5~MRPS.}
+\label{fig:bars}
+\end{figure}
+
+The yield system keeps its P99.9 under 20~$\mu$s until 2.2~MRPS and reaches 552~$\mu$s at 2.5~MRPS, the load at which the link is exactly full. Above 2.5~MRPS both policies are overloaded and their latencies depend on how long the run lasts, so they are not comparable results. The PF-aware variant is almost the same as round-robin here (8.8 against 8.9~$\mu$s at 1.5~MRPS), which Section~\ref{sec:pf} examines.
+
+\begin{table*}[t]
+\caption{Throughput (MRPS) and latency ($\mu$s) of the three policies. The last column is the P99.9 of the PF-aware yield system.}
+\label{tab:main}
+\centering
+\footnotesize
+\begin{tabular}{r|rrrr|rrrr|r}
+\toprule
+ & \multicolumn{4}{c|}{Busy-wait} & \multicolumn{4}{c|}{Yield, round-robin} & PF-aware \\
+Offered & Tput & P50 & P99 & P99.9 & Tput & P50 & P99 & P99.9 & P99.9 \\
+\midrule
+\input{tab_main}\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Effect of the local hit rate}
+\label{sec:hit}
+Figure~\ref{fig:hit} and Table~\ref{tab:hit} show the peak throughput when the local hit rate varies from 10\% to 80\%. The offered load is 4.0~MRPS, so any value equal to 4.0 is a lower bound. For hit rates where neither system is capped the ratio of yield to busy-wait is 1.37 at 10\%, 1.41 at 20\% and 1.51 at 40\%. It is therefore not largest at low hit rates, which is where a first reading of the argument for yielding might place it. The bound ratio explains why: the yield ceiling $1/((1-h)t_\ell)$ and the busy-wait ceiling $N/S_{bw}$ both rise as $h$ grows, but the second rises more slowly while it is not yet limited by the processors. At 60\% the yield system is cut off by the offered load (4.0 against a bound of 5.0), so the measured ratio of 1.35 is only a lower bound; the bounds themselves give 5.00/3.04, about 1.64. At 80\% both systems reach the offered load and show no difference.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{hit}
+\caption{Peak throughput against the local hit rate, with an offered load of 4.0~MRPS.}
+\label{fig:hit}
+\end{figure}
+
+\begin{table}[t]
+\caption{Hit-rate sweep: analytic bound and measured peak (MRPS). $^{\dagger}$ capped by the offered load of 4.0~MRPS.}
+\label{tab:hit}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{r|rrr|rrr|r}
+\toprule
+ & \multicolumn{3}{c|}{Busy-wait} & \multicolumn{3}{c|}{Yield} & Ratio \\
+$h$ (\%) & Bound & Meas. & \% & Bound & Meas. & \% & Y/B \\
+\midrule
+\input{tab_hit}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The column marked ``\%'' compares measurement with bound. For busy-wait the measured peak is 97.1--98.5\% of the bound in all uncapped rows, with the shortfall caused by queueing in the link, and for yield it is 99.9--100.1\%. The simple formulas of Section~\ref{sec:bounds} therefore describe the simulator well.
+
+In the Adios paper, reducing local memory from the full working set down to a tenth of it costs the yield-based system 25\% of its throughput and the busy-wait system 60\% \cite{adios}. Our model does not reproduce that pattern. Between 40\% and 10\% hit rate the busy-wait peak falls by 26\% (2.21 to 1.62) and the yield peak by 33\% (3.34 to 2.22), because the link ceiling of the yield system is inversely proportional to the miss rate. The offered-load cap prevents a comparison over the paper's full range, so we make no claim about the 100\%--10\% interval.
+
+\subsection{Page-fault-aware dispatch}
+\label{sec:pf}
+Table~\ref{tab:pf} and Figure~\ref{fig:pfgain} compare the P99.9 latency of the two dispatch rules, averaged over five seeds, at loads between 1.8 and 2.4~MRPS and for both queue-pair settings. The PF-aware rule is better at nine of the ten points, by 0.09\% to 1.22\%, with an average gain of 0.61\% for $t_q=1$~$\mu$s and 0.51\% for $t_q=2$~$\mu$s. The gain is largest at the lowest load tested and shrinks as the load approaches the link limit; at 2.4~MRPS with $t_q=2$~$\mu$s the sign reverses ($-0.12$\%), which is the size of the noise in these runs.
+
+\begin{table}[t]
+\caption{P99.9 latency ($\mu$s, mean of five seeds) of round-robin (RR) and PF-aware dispatch.}
+\label{tab:pf}
+\centering
+\footnotesize
+\begin{tabular}{llrrr}
+\toprule
+Setting & Load & RR & PF & Gain (\%) \\
+\midrule
+\input{tab_pf}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{pfgain}
+\caption{Gain of PF-aware over round-robin dispatch in P99.9 latency, in percent.}
+\label{fig:pfgain}
+\end{figure}
+
+The published gain is larger: up to 7.5\% for Memcached and 27\% for RocksDB \cite{adios}. A likely reason for the difference follows from the model. At 2.5~MRPS each queue pair handles 0.25 fetches per microsecond, which keeps it 25\% busy for $t_q=1$ and 50\% busy for $t_q=2$, while the shared link is 100\% busy. The dispatcher can move fetches between queue pairs but cannot reduce the load on the link, so the delay that it could remove is small. Real queue pairs have burstier arrivals and variable service times, which our fixed-time model lacks. We have not tested this explanation with a modified model, so it is a hypothesis.
+
+\subsection{Cost of a context switch}
+\label{sec:switch}
+Figure~\ref{fig:switch} and Table~\ref{tab:switch} vary the cost $t_s$ of one switch from 0.02 to 4~$\mu$s. For $t_s\le0.5$~$\mu$s the yield peak is 2.50~MRPS, the link bound, because the processors still have spare capacity. For larger costs the processors become the bottleneck and the peak follows $\Lambda_{cpu}$, falling to 2.21 at 1~$\mu$s, 1.81 at 1.5~$\mu$s and 0.95~MRPS at 4~$\mu$s. By linear interpolation the throughput of yield and busy-wait are equal at $t_s\approx1.57$~$\mu$s, which agrees with the break-even rule $t_s<t_f/2=1.5$~$\mu$s of Equation~\eqref{eq:breakeven} (the small excess comes from the 2.3\% by which the real busy-wait plateau lies under its bound). For the tail at 1.5~MRPS, yield stays below busy-wait's 17.2~$\mu$s up to about 1.44~$\mu$s.
+
+Both published cost values for a user-level switch, 0.02~$\mu$s (40 cycles at 2~GHz) for unithreads and about 0.10~$\mu$s (191 cycles) for the Shinjuku context \cite{adios}, lie far on the favourable side of this threshold. A switch that costs about 4~$\mu$s, as reported for a kernel scheduler \cite{adios}, is on the unfavourable side: the yield system then reaches only 0.95~MRPS, which is 54\% of the busy-wait plateau. This result supports the central claim of the paper that the cost of the switch decides the outcome, and it shows that the margin for a user-level design is large.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{switch}
+\caption{Effect of the context-switch cost on the yield system. Left: peak throughput. Right: P99.9 latency at 1.5~MRPS. Dashed lines show busy-wait.}
+\label{fig:switch}
+\end{figure*}
+
+\begin{table}[t]
+\caption{Switch-cost sweep: analytic yield bound and measured peak (MRPS), and P99.9 at 1.5~MRPS ($\mu$s).}
+\label{tab:switch}
+\centering
+\footnotesize
+\begin{tabular}{rrrrr}
+\toprule
+$t_s$ ($\mu$s) & Bound & Meas. & \% & P99.9 \\
+\midrule
+\input{tab_switch}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Realistic hit rates: LRU cache and skewed access}
+\label{sec:cache}
+The fixed 20\% hit probability is a simplification, since real hit rates come from cache size and access skew. Table~\ref{tab:cache} reports the LRU model of Section~\ref{sec:model} with an offered load of 5.0~MRPS. First, uniform access ($s=0$) with a 20\% cache produces a hit rate of 19.9\% and the same throughputs as the fixed model (1.77 and 2.50~MRPS), which validates the shortcut. Second, skew raises the hit rate sharply: 31.8\% at $s=0.5$, 59.3\% at $s=0.8$ and 80.6\% at $s=0.99$. With it both throughputs rise and the ratio grows from 1.41 to 1.67 at a hit rate of 59\%. This matches the 1.64 predicted from the bounds at the same hit rate (5.0/3.04 is the bound ratio at 60\%) and agrees with the corresponding row of the hit-rate sweep. Third, a larger cache has the same effect as more skew (Figure~\ref{fig:cache}): at $s=0.8$ the yield peak grows from 3.08 to 4.87~MRPS as the cache grows from 5\% to 20\% of the pages. Rows marked $^{\ddagger}$ equal the offered load and carry no ratio.
+
+\begin{table}[t]
+\caption{LRU cache with Zipf access: hit rate and peak throughput (MRPS). $^{\ddagger}$ equals the offered load of 5.0~MRPS (read as ``at least'').}
+\label{tab:cache}
+\centering
+\footnotesize
+\begin{tabular}{rrrrr}
+\toprule
+Skew / size & Hit (\%) & Busy-wait & Yield & Ratio \\
+\midrule
+\multicolumn{5}{l}{\textit{Skew sweep (cache 20\%)}} \\
+\input{tab_cache}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{cache}
+\caption{LRU cache with Zipf skew 0.8. Left: measured hit rate against cache size. Right: peak throughput against cache size.}
+\label{fig:cache}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{skew}
+\caption{Peak throughput against Zipf skew for a 20\% cache. Grey numbers are the measured hit rates.}
+\label{fig:skew}
+\end{figure}
+
+\subsection{Load-Aware Adaptive Hybrid Yielding}
+\label{sec:adaptive}
+The findings in Sections~\ref{sec:results} and~\ref{sec:switch} reveal a fundamental trade-off:
+\begin{enumerate}
+\item Under light offered load ($<1.0$~MRPS), workers are frequently idle. Pure yielding forces every miss to incur two context switches ($2 \times 0.02 = 0.04~\mu$s), even though no other requests are queued to use the core. This gives busy-waiting a small latency advantage ($5.30~\mu$s vs.\ $5.32~\mu$s).
+\item If the context-switch cost increases (e.g., in hypervisors, containers, or systems without 40-cycle unithreads where $t_s \ge 0.5~\mu$s), the light-load latency of pure yielding degrades significantly (by up to 28\% at $t_s = 1.5~\mu$s).
+\item Under heavy load ($>1.5$~MRPS), busy-waiting suffers from severe head-of-line blocking, capping throughput at 1.77~MRPS and causing tail latency ($P_{99.9}$) to explode past 3{,}000~$\mu$s.
+\end{enumerate}
+
+To achieve the best of both worlds, we evaluate our novel \emph{Load-Aware Adaptive Hybrid Yielding} strategy (\texttt{sweep\_adaptive.py}). The adaptive policy dynamically evaluates queue pressure via Equation~\eqref{eq:must_yield}. When queues are empty and idle cores exist, workers spin-wait directly on the RDMA fetch. As soon as a request enters the central queue, inbox backlog accumulates, or all peer cores become busy, the worker immediately yields to prevent head-of-line blocking.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{adaptive}
+\caption{Performance of the Load-Aware Adaptive Hybrid Yielding strategy. Left: median latency ($P_{50}$) across offered loads (0.2--2.5~MRPS). Right: sensitivity of median latency ($P_{50}$) to context-switch cost $t_s$ at light load (0.5~MRPS).}
+\label{fig:adaptive}
+\end{figure*}
+
+\begin{table*}[t]
+\caption{Performance of Load-Aware Adaptive Hybrid Yielding compared to Busy-Wait and Pure Yield (RR) across offered loads (0.2--2.5~MRPS). Throughput in MRPS, latencies in $\mu$s.}
+\label{tab:adaptive}
+\centering
+\footnotesize
+\begin{tabular}{r|rrr|rrr|rrr}
+\toprule
+ & \multicolumn{3}{c|}{Busy-wait} & \multicolumn{3}{c|}{Pure Yield (RR)} & \multicolumn{3}{c}{Adaptive Hybrid (Ours)} \\
+Offered & Tput & P50 & P99.9 & Tput & P50 & P99.9 & Tput & P50 & P99.9 \\
+\midrule
+\input{tab_adaptive}\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Table~\ref{tab:adaptive} and Figure~\ref{fig:adaptive} present the results. Two key findings emerge:
+\begin{itemize}
+\item \textbf{Low-load latency elimination:} At offered loads from 0.2 to 1.1~MRPS, Adaptive Hybrid achieves $P_{50} = 5.30~\mu$s, matching busy-waiting exactly and saving the 20~ns context-switch penalty of pure yielding. At 1.4~MRPS, Adaptive achieves $5.32~\mu$s (outperforming both busy-wait at 5.44~$\mu$s and pure yield at 5.43~$\mu$s).
+\item \textbf{High-load saturation avoidance:} When load reaches 1.8~MRPS, busy-wait saturates and collapses to $P_{50} = 1{,}626.7~\mu$s and $P_{99.9} = 3{,}014.3~\mu$s. Adaptive Hybrid yields immediately upon detecting backlog, sustaining 1.80~MRPS at $P_{50} = 5.77~\mu$s and scaling to the full 2.50~MRPS link bound.
+\item \textbf{Immunity to context-switch cost:} Figure~\ref{fig:adaptive} (right) plots median latency at 0.5~MRPS as switch cost $t_s$ varies from 0.02 to 1.5~$\mu$s. While pure yield's $P_{50}$ inflates linearly from 5.32 to 6.80~$\mu$s (a 28\% slowdown), Adaptive Hybrid remains completely flat at 5.30~$\mu$s across the entire range, because it detects that cores are idle and avoids switching altogether.
+\end{itemize}
+
+\subsection{Comparison with the published results}
+\label{sec:paperlink}
+Table~\ref{tab:paperlink} sets the simulator's results beside the figures that the Adios paper reports for its microbenchmark and applications. The two agree on the direction of every effect that the simulator can express. The size of the throughput gain is somewhat smaller in the simulator (1.41 against 1.58 for the microbenchmark), and the busy-wait plateau is higher (1.77 against about 1.4~MRPS). The second difference is expected: the per-request times of 0.85 and 5.3~$\mu$s that we take from the paper predict a plateau of 1.81~MRPS for eight workers, yet the authors measured about 1.4. The real system therefore spends time outside those figures, plausibly in networking and dispatching, and our model omits that time. We cannot confirm this from the simulator. The remaining rows of Table~\ref{tab:paperlink} are not reproduced or not testable, and we mark them as such.
+
+\begin{table*}[t]
+\caption{Published results of Adios \cite{adios} against this simulation study. ``Derived'' values are computed from the simulator's results and the model equations.}
+\label{tab:paperlink}
+\centering
+\footnotesize
+\begin{tabular}{p{4.6cm}p{4.7cm}p{4.6cm}p{2.4cm}}
+\toprule
+Quantity & Adios paper & This study & Agreement \\
+\midrule
+Busy-wait throughput plateau & about 1.4~MRPS (DiLOS) & 1.77~MRPS & differs \\
+Yield throughput plateau & grows to about 2.5~MRPS & 2.50~MRPS (link bound) & matches \\
+Peak throughput gain from yielding & 1.58$\times$ over DiLOS & 1.41$\times$ & same direction \\
+P99.9 gain near the busy-wait knee & 2.83$\times$ at 1.3~MRPS & 1.93$\times$ at 1.5~MRPS & same direction \\
+Link use at the busy-wait plateau & about 50\% & 71\% (derived) & same direction \\
+Link use at the yield plateau & up to 82\% & 100\% (by construction) & same direction \\
+Gain of PF-aware dispatch (P99.9) & up to 7.5\% (Memcached), 27\% (RocksDB) & at most 1.2\% & much smaller \\
+Penalty of yielding at low load & about 6\% higher P99.9 at 0.2~MRPS & about 2\% at 0.5~MRPS (single run) & same direction \\
+Loss of throughput when local memory shrinks & yield 25\%, busy-wait 60\% (100\% to 10\% local) & yield 33\%, busy-wait 26\% (40\% to 10\%) & not reproduced \\
+Preemptive scheduling instead of yield & no benefit & not modelled & not tested \\
+\bottomrule
+\end{tabular}
+\end{table*}

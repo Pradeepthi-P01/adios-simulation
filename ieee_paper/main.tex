@@ -1,0 +1,102 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric}
+\graphicspath{{figs/}}
+\pagestyle{plain}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em T\kern-.1667em\lower.7ex\hbox{E}\kern-.125em X}}
+
+\begin{document}
+
+\title{Yielding, Spinning, or Both? A Simulation Study and Adaptive Hybrid Strategy for Page-Fault Handling in Microsecond-Scale Memory Disaggregation}
+
+\author{
+\IEEEauthorblockN{
+  \makebox[0.3\textwidth][c]{Palem Pradeepthi}
+  \makebox[0.38\textwidth][c]{Dr. N. Srinivas Naik, Ph.D.}
+  \makebox[0.3\textwidth][c]{Majji Rakshitha}
+}
+\vspace{0.1em}
+\IEEEauthorblockA{
+  \makebox[0.3\textwidth][c]{\textit{Student Author}}
+  \makebox[0.38\textwidth][c]{\textit{Associate Professor (Guided by)}}
+  \makebox[0.3\textwidth][c]{\textit{Student Author}}
+}
+\vspace{0.4em}
+\IEEEauthorblockA{\textit{Department of Computer Science and Engineering, IIITDM Kurnool, Kurnool, India}}
+}
+
+\maketitle
+
+\begin{abstract}
+In paging-based memory disaggregation, a compute node keeps part of its working set in local DRAM and fetches the remaining pages from a remote memory node over RDMA. Each local miss becomes a page fault whose service time is only a few microseconds. Recent systems therefore make the faulting worker spin until the page arrives, because the cost of a conventional context switch exceeds the fetch itself. A 2025 EuroSys paper on the Adios system argues that spinning creates head-of-line blocking and leaves the network under-used, and that cheap user-level context switches make yielding the better choice again. We study this claim with a discrete-event simulator written in Python. The simulator models eight workers, a shared central queue, per-worker RDMA queue pairs and a shared link, and it compares a spinning baseline, a yielding system with round-robin dispatch, and a yielding system with page-fault-aware dispatch. With a 20 percent local hit rate, yielding raises peak throughput from 1.77 to 2.50 million requests per second, a factor of 1.41, and cuts the 99.9th percentile latency at 1.5 million requests per second from 17.2 to 8.9 microseconds. Closed-form capacity bounds match every measured peak within three percent, and used as a model they predict that yielding needs less than half as many workers as spinning to carry the same load.
+
+However, we also observe that pure yielding incurs an inherent latency penalty at light load because cores are idle and paying context-switch overhead is unneeded, and that yielding degrades sharply if context switches cost more than about half of a fetch. To address these limitations, we design, implement, and evaluate a novel \emph{Load-Aware Adaptive Hybrid Yielding} strategy. By dynamically monitoring queue backlog and idle-core availability, our adaptive policy achieves optimal median latency ($5.30~\mu$s, matching busy-waiting under light load) while retaining full peak throughput (2.50~MRPS) and eliminating head-of-line blocking under heavy load. Furthermore, it renders the system completely immune to context-switch overhead inflation up to $1.5~\mu$s. We state clearly which parts of the original system are not reproduced.
+\end{abstract}
+
+\begin{IEEEkeywords}
+memory disaggregation, page fault handling, RDMA, tail latency, discrete-event simulation, user-level threads, unikernel, adaptive scheduling, hybrid polling
+\end{IEEEkeywords}
+
+\input{sec1_intro}
+\input{sec2_background}
+\input{sec3_related}
+\input{sec4_adios}
+\input{sec5_model}
+\input{sec6_method}
+\input{sec7_results}
+\input{sec7b_analysis}
+\input{sec8_discussion}
+\input{sec9_conclusion}
+
+\input{appendix}
+
+\section*{Acknowledgment}
+The authors thank the course instructor for guidance on the scope of the project. The simulator and all result files are available in the project repository listed in Table~\ref{tab:experiments}.
+
+\begin{thebibliography}{00}
+\bibitem{adios} W. Yoon, J. Ok, S. Moon, and Y. Kwon, ``Adios to busy-waiting for microsecond-scale memory disaggregation,'' in \textit{Proc. 20th European Conf. on Computer Systems (EuroSys '25)}, Rotterdam, The Netherlands, Mar. 2025, doi: 10.1145/3689031.3717475.
+\bibitem{dilos} W. Yoon, J. Ok, J. Oh, S. Moon, and Y. Kwon, ``DiLOS: Do not trade compatibility for performance in memory disaggregation,'' in \textit{Proc. 18th European Conf. on Computer Systems (EuroSys '23)}, Rome, Italy, 2023, pp. 266--282, doi: 10.1145/3552326.3567488.
+\bibitem{infiniswap} J. Gu, Y. Lee, Y. Zhang, M. Chowdhury, and K. G. Shin, ``Efficient memory disaggregation with Infiniswap,'' in \textit{Proc. 14th USENIX Symp. on Networked Systems Design and Implementation (NSDI '17)}, Boston, MA, USA, 2017, pp. 649--667.
+\bibitem{fastswap} E. Amaro, C. Branner-Augmon, Z. Luo, A. Ousterhout, M. K. Aguilera, A. Panda, S. Ratnasamy, and S. Shenker, ``Can far memory improve job throughput?'' in \textit{Proc. 15th European Conf. on Computer Systems (EuroSys '20)}, Heraklion, Greece, 2020, Art. 14, doi: 10.1145/3342195.3387522.
+\bibitem{hermit} Y. Qiao, C. Wang, Z. Ruan, A. Belay, Q. Lu, Y. Zhang, M. Kim, and G. H. Xu, ``Hermit: Low-latency, high-throughput, and transparent remote memory via feedback-directed asynchrony,'' in \textit{Proc. 20th USENIX Symp. on Networked Systems Design and Implementation (NSDI '23)}, Boston, MA, USA, 2023, pp. 181--198.
+\bibitem{leap} H. A. Maruf and M. Chowdhury, ``Effectively prefetching remote memory with Leap,'' in \textit{Proc. USENIX Annual Technical Conf. (USENIX ATC '20)}, 2020.
+\bibitem{aifm} Z. Ruan, M. Schwarzkopf, M. K. Aguilera, and A. Belay, ``AIFM: High-performance, application-integrated far memory,'' in \textit{Proc. 14th USENIX Symp. on Operating Systems Design and Implementation (OSDI '20)}, 2020, pp. 315--332.
+\bibitem{semeru} C. Wang, H. Ma, S. Liu, Y. Li, Z. Ruan, K. Nguyen, M. D. Bond, R. Netravali, M. Kim, and G. H. Xu, ``Semeru: A memory-disaggregated managed runtime,'' in \textit{Proc. 14th USENIX Symp. on Operating Systems Design and Implementation (OSDI '20)}, 2020, pp. 261--280.
+\bibitem{shinjuku} K. Kaffes, T. Chong, J. T. Humphries, A. Belay, D. Mazi\`eres, and C. Kozyrakis, ``Shinjuku: Preemptive scheduling for $\mu$second-scale tail latency,'' in \textit{Proc. 16th USENIX Symp. on Networked Systems Design and Implementation (NSDI '19)}, Boston, MA, USA, 2019, pp. 345--360.
+\bibitem{concord} R. Iyer, M. Unal, M. Kogias, and G. Candea, ``Achieving microsecond-scale tail latency efficiently with approximate optimal scheduling,'' in \textit{Proc. 29th Symp. on Operating Systems Principles (SOSP '23)}, Koblenz, Germany, 2023, pp. 466--481, doi: 10.1145/3600006.3613136.
+\bibitem{zygos} G. Prekas, M. Kogias, and E. Bugnion, ``ZygOS: Achieving low tail latency for microsecond-scale networked tasks,'' in \textit{Proc. 26th Symp. on Operating Systems Principles (SOSP '17)}, Shanghai, China, 2017, pp. 325--341, doi: 10.1145/3132747.3132780.
+\bibitem{shenango} A. Ousterhout, J. Fried, J. Behrens, A. Belay, and H. Balakrishnan, ``Shenango: Achieving high CPU efficiency for latency-sensitive datacenter workloads,'' in \textit{Proc. 16th USENIX Symp. on Networked Systems Design and Implementation (NSDI '19)}, Boston, MA, USA, 2019, pp. 361--378.
+\bibitem{persephone} H. M. Demoulin, J. Fried, I. Pedisich, M. Kogias, B. T. Loo, L. T. X. Phan, and I. Zhang, ``When idling is ideal: Optimizing tail-latency for heavy-tailed datacenter workloads with Pers\'ephone,'' in \textit{Proc. 28th ACM Symp. on Operating Systems Principles (SOSP '21)}, 2021, pp. 621--637, doi: 10.1145/3477132.3483571.
+\bibitem{caladan} J. Fried, Z. Ruan, A. Ousterhout, and A. Belay, ``Caladan: Mitigating interference at microsecond timescales,'' in \textit{Proc. 14th USENIX Symp. on Operating Systems Design and Implementation (OSDI '20)}, 2020, pp. 281--297.
+\bibitem{capriccio} R. von Behren, J. Condit, F. Zhou, G. C. Necula, and E. Brewer, ``Capriccio: Scalable threads for Internet services,'' \textit{ACM SIGOPS Oper. Syst. Rev.}, vol. 37, no. 5, Oct. 2003, doi: 10.1145/1165389.945471.
+\bibitem{arachne} H. Qin, Q. Li, J. Speiser, P. Kraft, and J. Ousterhout, ``Arachne: Core-aware thread management,'' in \textit{Proc. 13th USENIX Symp. on Operating Systems Design and Implementation (OSDI '18)}, Carlsbad, CA, USA, 2018, pp. 145--160.
+\bibitem{sa} T. E. Anderson, B. N. Bershad, E. D. Lazowska, and H. M. Levy, ``Scheduler activations: Effective kernel support for the user-level management of parallelism,'' in \textit{Proc. 13th ACM Symp. on Operating Systems Principles (SOSP '91)}, Pacific Grove, CA, USA, 1991, pp. 95--109, doi: 10.1145/121132.121151.
+\bibitem{unikernels} A. Madhavapeddy and D. J. Scott, ``Unikernels: The rise of the virtual library operating system,'' \textit{Commun. ACM}, vol. 57, no. 1, pp. 61--69, Jan. 2014, doi: 10.1145/2541883.2541895.
+\bibitem{osv} A. Kivity, D. Laor, G. Costa, P. Enberg, N. Har'El, D. Marti, and V. Zolotarov, ``OSv---Optimizing the operating system for virtual machines,'' in \textit{Proc. USENIX Annual Technical Conf. (USENIX ATC '14)}, Philadelphia, PA, USA, 2014, pp. 61--72.
+\bibitem{unikraft} S. Kuenzer \textit{et al.}, ``Unikraft: Fast, specialized unikernels the easy way,'' in \textit{Proc. 16th European Conf. on Computer Systems (EuroSys '21)}, 2021, pp. 376--394, doi: 10.1145/3447786.3456248.
+\bibitem{ukl} A. Raza \textit{et al.}, ``Unikernel Linux (UKL),'' in \textit{Proc. 18th European Conf. on Computer Systems (EuroSys '23)}, Rome, Italy, 2023, pp. 590--605, doi: 10.1145/3552326.3587458.
+\bibitem{conga} M. Alizadeh \textit{et al.}, ``CONGA: Distributed congestion-aware load balancing for datacenters,'' in \textit{Proc. ACM SIGCOMM}, Chicago, IL, USA, 2014, pp. 503--514, doi: 10.1145/2619239.2626316.
+\bibitem{plb} M. A. Qureshi \textit{et al.}, ``PLB: Congestion signals are simple and effective for network load balancing,'' in \textit{Proc. ACM SIGCOMM}, Amsterdam, The Netherlands, 2022, pp. 207--218, doi: 10.1145/3544216.3544226.
+\bibitem{killer} L. Barroso, M. Marty, D. Patterson, and P. Ranganathan, ``Attack of the killer microseconds,'' \textit{Commun. ACM}, vol. 60, no. 4, pp. 48--54, Apr. 2017, doi: 10.1145/3015146.
+\bibitem{tail} J. Dean and L. A. Barroso, ``The tail at scale,'' \textit{Commun. ACM}, vol. 56, no. 2, pp. 74--80, Feb. 2013, doi: 10.1145/2408776.2408794.
+\bibitem{tales} J. Li, N. K. Sharma, D. R. K. Ports, and S. D. Gribble, ``Tales of the tail: Hardware, OS, and application-level sources of tail latency,'' in \textit{Proc. ACM Symp. on Cloud Computing (SoCC)}, 2014, pp. 1--14.
+\bibitem{kalia} A. Kalia, M. Kaminsky, and D. G. Andersen, ``Design guidelines for high performance RDMA systems,'' in \textit{Proc. USENIX Annual Technical Conf. (USENIX ATC '16)}, Denver, CO, USA, 2016, pp. 437--450.
+\bibitem{leverich} J. Leverich and C. Kozyrakis, ``Reconciling high server utilization and sub-millisecond quality-of-service,'' in \textit{Proc. 9th European Conf. on Computer Systems (EuroSys '14)}, Amsterdam, The Netherlands, 2014, Art. 4, doi: 10.1145/2592798.2592821.
+\bibitem{zipf} L. Breslau, P. Cao, L. Fan, G. Phillips, and S. Shenker, ``Web caching and Zipf-like distributions: Evidence and implications,'' in \textit{Proc. IEEE INFOCOM}, 1999, pp. 126--134.
+\bibitem{cxl} CXL Consortium, ``Compute Express Link.'' [Online]. Available: \url{https://www.computeexpresslink.org}
+\bibitem{simpy} Team SimPy, ``SimPy: Discrete event simulation for Python.'' [Online]. Available: \url{https://simpy.readthedocs.io}
+\bibitem{adioscode} ANLAB-KAIST, ``Adios source code.'' [Online]. Available: \url{https://github.com/ANLAB-KAIST/adios}
+\end{thebibliography}
+
+\end{document}

@@ -9,6 +9,7 @@ SYSTEMS = {
     "busywait": lambda load: busywait.run(load),
     "yield_rr": lambda load: yieldsys.run(load, "rr"),
     "yield_pf": lambda load: yieldsys.run(load, "pf"),
+    "yield_adaptive": lambda load: yieldsys.run(load, "adaptive"),
 }
 
 rows = []

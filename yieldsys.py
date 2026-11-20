@@ -51,9 +51,9 @@ class YieldSystem:
     def choose(self, idle):
         n = config.NUM_WORKERS
         order = lambda w: (w.id - self.rr_next) % n
-        if self.policy == "pf":      # fewest outstanding page fetches first
+        if self.policy in ["pf", "adaptive_pf"]:      # fewest outstanding page fetches first
             w = min(idle, key=lambda w: (self.rdma.outstanding[w.id], order(w)))
-        else:                        # round-robin
+        else:                                          # round-robin
             w = min(idle, key=order)
         self.rr_next = (w.id + 1) % n
         return w
@@ -91,8 +91,22 @@ class YieldSystem:
                     req["fault"] = not self.cache.access(req["page"])
                 if req["fault"]:
                     yield self.env.timeout(pre)
-                    self.env.process(self.fetch_and_resume(w, req))   # issue fetch...
-                    yield self.env.timeout(config.CONTEXT_SWITCH)     # ...and yield
+                    if self.policy.startswith("adaptive"):
+                        other_idle = sum(1 for other in self.workers if other.idle and other.id != w.id)
+                        must_yield = (len(w.inbox.items) > 0) or (len(self.pending) > 0) or (other_idle == 0)
+                        if must_yield:
+                            self.env.process(self.fetch_and_resume(w, req))
+                            yield self.env.timeout(config.CONTEXT_SWITCH)
+                        else:
+                            # Uncontended: spin-wait directly on RDMA fetch, avoiding context-switch cost
+                            yield self.env.process(self.rdma.fetch(w.id))
+                            if self.cache is not None:
+                                self.cache.insert(req["page"])
+                            yield self.env.timeout(post)
+                            self.finish(req)
+                    else:
+                        self.env.process(self.fetch_and_resume(w, req))   # issue fetch...
+                        yield self.env.timeout(config.CONTEXT_SWITCH)     # ...and yield
                 else:
                     yield self.env.timeout(config.LOCAL_TIME)
                     self.finish(req)

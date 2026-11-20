@@ -1,0 +1,84 @@
+\section{The Adios Design and Its Reported Results}
+\label{sec:adios}
+Everything in this section comes from the Adios paper \cite{adios}; the organization and wording are ours.
+
+\subsection{Problem statement from the original measurements}
+The authors begin by profiling DiLOS, a busy-waiting memory disaggregation system, on a microbenchmark where clients read random elements of a large array and only 20\% of that array fits in local DRAM. They find that P99 latency starts rising steeply at around 1.3~MRPS and that throughput flattens at roughly 1.4~MRPS. Breaking down where request time goes, they show that queueing delay dominates the tail beyond the median, and that the RDMA link is running at only about half its capacity even when the system is fully saturated. These two observations form the empirical foundation for the HOL-blocking and under-utilization arguments introduced in Section~\ref{sec:background}. As a further check, they test a preemptive scheduler with a 5~$\mu$s slice and confirm that it does not reduce the tail---spinning cannot be preempted into smaller pieces because the wait itself is not computation.
+
+\subsection{Main ingredients}
+\textbf{Unikernel base.} Adios runs on the OSv unikernel. The page-fault handler, scheduler, and application all share one address space and one protection domain, so a transfer of control between them is a plain function call without any privilege boundary crossing.
+
+\textbf{Unithreads.} Each request executes inside a compact user-level thread. A single buffer holds the packet payload, a minimal saved context (six registers: one for passing arguments and five that a callee must preserve), and the stack. The authors report a context switch of 40~cycles saving 80~bytes, compared with 191~cycles and 968~bytes for the user-level context in Shinjuku. A \emph{universal stack} merges the kernel and user stacks of a unithread, bringing the per-request memory footprint down to 4~KiB.
+
+\textbf{Yield-based fault handling.} When a unithread faults, the handler posts the RDMA read and immediately hands control to the scheduler. The worker picks up another request and, before starting it, polls the NIC for completed fetches. When a fetch finishes, the faulting unithread becomes runnable again, the handler maps the page, and execution resumes.
+
+\textbf{Reclaimer.} A dedicated pinned thread watches available memory and proactively evicts pages, so a fault never has to stall waiting for a free frame.
+
+\textbf{Single queue with page-fault-aware dispatch.} A dispatcher thread maintains one central queue and assigns work to idle workers. Because yielding workers keep multiple fetches outstanding, their queue pairs can become unevenly loaded. The dispatch rule (Algorithm~\ref{alg:dispatch}) breaks ties by preferring whichever idle worker has the fewest outstanding fetches---an idea borrowed from congestion-aware load balancing in datacenter networks \cite{conga,plb}.
+
+\textbf{Polling delegation.} A worker that sends a reply does not wait for the transmission to complete. Reply completions land on the dispatcher's queue, and the dispatcher recycles the buffers. This eliminates a second busy-wait on the response path.
+
+\begin{algorithm}[t]
+\caption{Page-fault-aware dispatching (our rendering of the policy in \cite{adios}).}
+\label{alg:dispatch}
+\begin{algorithmic}[1]
+\small
+\Procedure{Dispatch}{$Q$, $W$}
+\State $I \gets \{w \in W : w \text{ is idle}\}$
+\State sort $I$ by outstanding fetches of $w$, ascending
+\While{$Q \neq \emptyset$ \textbf{and} $I \neq \emptyset$}
+  \State $r \gets \text{pop}(Q)$;\; $w \gets \text{pop}(I)$
+  \State send $r$ to $w$
+\EndWhile
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Published results}
+The evaluation uses eight workers, one dispatcher, and one reclaimer on a 100~GbE testbed, comparing Adios against Hermit, DiLOS, and a preemptive DiLOS variant. Table~\ref{tab:paper} lists the specific figures we compare against in Section~\ref{sec:paperlink}. Two additional results are worth noting because our simulator can speak to them. First, as local memory shrinks from 100\% to 10\% of the working set, Adios loses 25\% of its throughput while DiLOS loses 60\%---yielding degrades more gracefully under memory pressure. Second, at very low load Adios is marginally slower than DiLOS (6\% higher P99.9 at 0.2~MRPS), because yielding pays switch costs even when there is nothing else to run on the freed core.
+
+\begin{table}[t]
+\caption{Selected results reported for Adios \cite{adios}}
+\label{tab:paper}
+\centering
+\footnotesize
+\begin{tabular}{p{3.9cm}p{3.2cm}}
+\toprule
+Quantity & Reported value \\
+\midrule
+DiLOS throughput plateau (microbenchmark) & about 1.4 MRPS \\
+Adios throughput growth (microbenchmark) & up to about 2.5 MRPS, $\approx 1.5\times$ DiLOS \\
+RDMA link utilization & about 50\% (DiLOS) vs.\ up to 82\% (Adios) \\
+Queueing delay at 1.3 MRPS & $16.3\times$ (P99) and $36.8\times$ (P99.9) smaller \\
+Context switch & 40 vs.\ 191 cycles (Shinjuku) \\
+PF-aware dispatch gain on P99.9 & up to 7.5\% (Memcached), 27\% (RocksDB) \\
+Real applications vs.\ DiLOS & throughput $1.07$--$1.64\times$; P99.9 $1.99$--$10.89\times$ lower \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{What the paper leaves open}
+The authors are candid about the limits of their design. The cooperative scheduler cannot interrupt a long computation. Single-queue dispatching is expected to scale to only around ten workers before the dispatcher itself becomes a bottleneck. Two threads (dispatcher and reclaimer) are permanently pinned and therefore unavailable for application work. And the benefit of yielding depends on there being other requests available to run while a fault is outstanding, so compute-heavy or single-threaded workloads gain little. These caveats directly shaped our choice of experiments: we vary the local hit rate, the context-switch cost, and the cache size, each of which changes how much parallel work is available and how costly the switch is.
+
+\begin{table}[t]
+\caption{Which Adios mechanisms the simulator represents}
+\label{tab:modelled}
+\centering
+\footnotesize
+\begin{tabular}{p{2.5cm}p{1.1cm}p{3.5cm}}
+\toprule
+Mechanism & Modelled? & How \\
+\midrule
+Yield on fault & Yes & Fetch issued, worker serves other requests \\
+Context-switch cost & Yes & Parameter $t_s$, swept from 0.02 to 4~$\mu$s \\
+Single central queue & Yes & One FIFO for both policies \\
+PF-aware dispatch & Yes & Fewest outstanding fetches first \\
+RDMA queue pairs & Partly & One FIFO server per worker, plus a shared link \\
+Local cache & Partly & Fixed hit rate; optional LRU with Zipf access \\
+Unithread layout, universal stack & No & Only the switch cost is kept \\
+Polling delegation & No & Reply path is not simulated \\
+Reclaimer thread & No & Free frames are always available \\
+Real NIC and kernel behaviour & No & Fixed service times \\
+\bottomrule
+\end{tabular}
+\end{table}
