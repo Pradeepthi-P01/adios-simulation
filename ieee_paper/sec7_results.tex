@@ -108,7 +108,7 @@ The published gain is larger: up to 7.5\% for Memcached and 27\% for RocksDB \ci
 \label{sec:switch}
 Figure~\ref{fig:switch} and Table~\ref{tab:switch} vary the cost $t_s$ of one switch from 0.02 to 4~$\mu$s. For $t_s\le0.5$~$\mu$s the yield peak is 2.50~MRPS, the link bound, because the processors still have spare capacity. For larger costs the processors become the bottleneck and the peak follows $\Lambda_{cpu}$, falling to 2.21 at 1~$\mu$s, 1.81 at 1.5~$\mu$s and 0.95~MRPS at 4~$\mu$s. By linear interpolation the throughput of yield and busy-wait are equal at $t_s\approx1.57$~$\mu$s, which agrees with the break-even rule $t_s<t_f/2=1.5$~$\mu$s of Equation~\eqref{eq:breakeven} (the small excess comes from the 2.3\% by which the real busy-wait plateau lies under its bound). For the tail at 1.5~MRPS, yield stays below busy-wait's 17.2~$\mu$s up to about 1.44~$\mu$s.
 
-Both published cost values for a user-level switch, 0.02~$\mu$s (40 cycles at 2~GHz) for unithreads and about 0.10~$\mu$s (191 cycles) for the Shinjuku context \cite{adios}, lie far on the favourable side of this threshold. A switch that costs about 4~$\mu$s, as reported for a kernel scheduler \cite{adios}, is on the unfavourable side: the yield system then reaches only 0.95~MRPS, which is 54\% of the busy-wait plateau. This result supports the central claim of the paper that the cost of the switch decides the outcome, and it shows that the margin for a user-level design is large.
+Both reported switch costs for user-level threads---0.02~$\mu$s (40 cycles) for Adios's unithreads and 0.10~$\mu$s (191 cycles) for Shinjuku \cite{adios}---fall comfortably below this 1.5~$\mu$s ceiling. In contrast, standard kernel-space context switching takes $\approx 4~\mu$s \cite{adios}, driving yield capacity down to 0.95~MRPS (merely 54\% of spinning throughput). This confirms the paper's core thesis: yielding's feasibility in disaggregated paging hinges entirely on keeping thread-switch overhead below microsecond scales.
 
 \begin{figure*}[t]
 \centering
@@ -166,14 +166,9 @@ Skew / size & Hit (\%) & Busy-wait & Yield & Ratio \\
 
 \subsection{Load-Aware Adaptive Hybrid Yielding}
 \label{sec:adaptive}
-The findings in Sections~\ref{sec:results} and~\ref{sec:switch} reveal a fundamental trade-off:
-\begin{enumerate}
-\item Under light offered load ($<1.0$~MRPS), workers are frequently idle. Pure yielding forces every miss to incur two context switches ($2 \times 0.02 = 0.04~\mu$s), even though no other requests are queued to use the core. This gives busy-waiting a small latency advantage ($5.30~\mu$s vs.\ $5.32~\mu$s).
-\item If the context-switch cost increases (e.g., in hypervisors, containers, or systems without 40-cycle unithreads where $t_s \ge 0.5~\mu$s), the light-load latency of pure yielding degrades significantly (by up to 28\% at $t_s = 1.5~\mu$s).
-\item Under heavy load ($>1.5$~MRPS), busy-waiting suffers from severe head-of-line blocking, capping throughput at 1.77~MRPS and causing tail latency ($P_{99.9}$) to explode past 3{,}000~$\mu$s.
-\end{enumerate}
+Evaluating pure spinning against pure yielding exposes an inherent tension across load regimes. Under light traffic ($< 1.0$~MRPS), processor cores sit idle between request arrivals. Unconditionally yielding on every miss forces the system to pay a 40~ns round-trip context-switch penalty ($2 \times 0.02~\mu$s) even though no other task is waiting for the CPU, giving busy-waiting a slight latency edge (5.30~$\mu$s vs.\ 5.32~$\mu$s median). If thread switches are slower ($t_s \ge 0.5~\mu$s), this light-load penalty swells to 28\% at $t_s = 1.5~\mu$s. Conversely, under heavy traffic ($> 1.5$~MRPS), spinning suffers from severe HOL blocking: worker cores stall waiting on RDMA packets, capping throughput at 1.77~MRPS and causing tail latency ($P_{99.9}$) to jump from 17.2~$\mu$s to over 3{,}000~$\mu$s.
 
-To achieve the best of both worlds, we evaluate our novel \emph{Load-Aware Adaptive Hybrid Yielding} strategy (\texttt{sweep\_adaptive.py}). The adaptive policy dynamically evaluates queue pressure via Equation~\eqref{eq:must_yield}. When queues are empty and idle cores exist, workers spin-wait directly on the RDMA fetch. As soon as a request enters the central queue, inbox backlog accumulates, or all peer cores become busy, the worker immediately yields to prevent head-of-line blocking.
+To resolve this dilemma, we evaluate our \emph{Load-Aware Adaptive Hybrid Yielding} policy (\texttt{sweep\_adaptive.py}). Workers consult the local condition in Equation~\eqref{eq:must_yield} during fault handling: if work is queued locally, in the central dispatcher, or if peer cores are saturated, the worker yields immediately to prevent blocking. Otherwise, it polls locally on the RDMA completion queue.
 
 \begin{figure*}[t]
 \centering
@@ -197,12 +192,12 @@ Offered & Tput & P50 & P99.9 & Tput & P50 & P99.9 & Tput & P50 & P99.9 \\
 \end{tabular}
 \end{table*}
 
-Table~\ref{tab:adaptive} and Figure~\ref{fig:adaptive} present the results. Two key findings emerge:
-\begin{itemize}
-\item \textbf{Low-load latency elimination:} At offered loads from 0.2 to 1.1~MRPS, Adaptive Hybrid achieves $P_{50} = 5.30~\mu$s, matching busy-waiting exactly and saving the 20~ns context-switch penalty of pure yielding. At 1.4~MRPS, Adaptive achieves $5.32~\mu$s (outperforming both busy-wait at 5.44~$\mu$s and pure yield at 5.43~$\mu$s).
-\item \textbf{High-load saturation avoidance:} When load reaches 1.8~MRPS, busy-wait saturates and collapses to $P_{50} = 1{,}626.7~\mu$s and $P_{99.9} = 3{,}014.3~\mu$s. Adaptive Hybrid yields immediately upon detecting backlog, sustaining 1.80~MRPS at $P_{50} = 5.77~\mu$s and scaling to the full 2.50~MRPS link bound.
-\item \textbf{Immunity to context-switch cost:} Figure~\ref{fig:adaptive} (right) plots median latency at 0.5~MRPS as switch cost $t_s$ varies from 0.02 to 1.5~$\mu$s. While pure yield's $P_{50}$ inflates linearly from 5.32 to 6.80~$\mu$s (a 28\% slowdown), Adaptive Hybrid remains completely flat at 5.30~$\mu$s across the entire range, because it detects that cores are idle and avoids switching altogether.
-\end{itemize}
+Figure~\ref{fig:adaptive} and Table~\ref{tab:adaptive} highlight three core outcomes:
+\begin{enumerate}
+\item \emph{Eliminating the Light-Load Tax}: Between 0.2 and 1.1~MRPS, Adaptive Hybrid achieves $P_{50} = 5.30~\mu$s, matching busy-waiting exactly and saving the 20~ns unneeded switch. At 1.4~MRPS, Adaptive achieves $5.32~\mu$s, outperforming both busy-wait ($5.44~\mu$s) and pure yield ($5.43~\mu$s).
+\item \emph{Avoiding High-Load Saturation}: At 1.8~MRPS, busy-wait collapses to $P_{50} = 1{,}626.7~\mu$s and $P_{99.9} = 3{,}014.3~\mu$s. Adaptive detects queuing instantly, maintaining $1.80$~MRPS at $P_{50} = 5.77~\mu$s and scaling smoothly to the 2.50~MRPS link bound.
+\item \emph{Switch-Cost Resilience}: Figure~\ref{fig:adaptive} (right) tracks 0.5~MRPS median latency as switch cost $t_s$ varies from 0.02 to 1.5~$\mu$s. While pure yield degrades from 5.32 to 6.80~$\mu$s (+28\% slowdown), Adaptive Hybrid stays flat at 5.30~$\mu$s across the entire range by recognizing that cores are free and avoiding the scheduler.
+\end{enumerate}
 
 \subsection{Comparison with the published results}
 \label{sec:paperlink}

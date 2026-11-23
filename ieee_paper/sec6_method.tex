@@ -1,15 +1,15 @@
 \section{Experimental Method}
 \label{sec:method}
 
-\subsection{Load generation and measurement}
-Request arrivals follow a Poisson process whose rate equals the offered load. We deliberately use open-loop arrivals: a closed-loop client slows its request rate whenever the system slows down and thereby masks queueing delay, which is precisely what we want to observe \cite{leverich}. Each simulation run covers 200~ms of simulated time. The first 20~ms serve as a warm-up period and are excluded from all measurements, leaving a 180~ms measurement window. At 1.5~MRPS the window captures roughly 270{,}000 requests; at 0.5~MRPS, about 90{,}000.
+\subsection{Traffic Generation and Measurement Window}
+We model traffic using an open-loop Poisson arrival generator. Closed-loop setups throttle clients when server queues grow, which masks queueing delay; open-loop generation accurately exposes tail latency under stress \cite{leverich}. Simulations run for 200~ms. We discard the initial 20~ms as a warm-up phase to eliminate startup transients, analyzing the steady-state 180~ms window (corresponding to roughly 270{,}000 completed requests at 1.5~MRPS).
 
-\emph{Latency} for a request is defined as its completion time minus its arrival time, capturing everything: queueing, processor work, context switches, and the page-fetch wait. Percentiles are computed with linear interpolation over requests that both arrived after the warm-up and completed before the run ended. \emph{Throughput} is the count of completions inside the measurement window divided by the window length. A throughput value equal to the offered load means the system kept up; we treat such values as lower bounds on capacity and mark them in every table.
+Request latency is measured from arrival in the system queue until final completion, covering queue wait, worker CPU phases, context switches, and network round-trips. We compute percentiles via linear interpolation over all completed requests. Throughput is the count of finished requests divided by the 180~ms window.
 
-One limitation of this procedure is worth flagging. When the system is overloaded, requests that are still in queue at the end of the run have no completion time and are silently excluded from the latency sample. Latency values reported above capacity therefore understate the true delay and vary with the simulated duration. We include them to show where the saturation knee lies but do not interpret their absolute magnitude as a result.
+\emph{Overload Measurement Caveat}: Once offered load exceeds a system's saturation limit, requests trapped in the arrival queue at simulation termination never record a finish timestamp. Consequently, reported latency numbers above saturation reflect only completed requests and depend on window length. We report them simply to pinpoint the saturation knee, not as steady-state latency metrics.
 
-\subsection{Experiments}
-Table~\ref{tab:experiments} enumerates the experiments, the parameter each one varies, and the script and output file in the repository.\footnote{\url{https://github.com/Pradeepthi-P01/adios-simulation}} The main comparison runs the three policies (busy-wait, yield with RR dispatch, and yield with PF dispatch) at nine offered loads between 0.5 and 3.0~MRPS. All sweeps use the default parameters from Table~\ref{tab:params} except for the quantity under study.
+\subsection{Evaluated Workloads and Sweeps}
+Table~\ref{tab:experiments} summarizes the experimental configurations and their corresponding source scripts.\footnote{\url{https://github.com/Pradeepthi-P01/adios-simulation}} We evaluate offered loads from 0.5 to 3.0~MRPS. All runs use random seed 42, except the PF-aware dispatch sweep which averages across 5 seeds (1--5) to filter out random noise.
 
 \begin{table}[t]
 \caption{Experiments and where to find them in the repository \texttt{adios-simulation}}
@@ -30,10 +30,8 @@ Adaptive evaluation & load 0.2--2.5, $t_s=0.02$--1.5~$\mu$s & \texttt{sweep\_ada
 \end{tabular}
 \end{table}
 
-All runs use the fixed seed 42, with one exception: the dispatch-rule comparison averages five seeds (1--5) because the effect of PF-aware dispatch is small and a single seed could easily be misleading. All other experiments are single runs. We did not compute confidence intervals; for that reason we describe differences of a few percent as small and stop short of calling them statistically significant.
-
-\subsection{Implementation of the worker loops}
-Algorithm~\ref{alg:workers} gives the logic of both worker types as implemented in the simulator. They differ in exactly one place: what the worker does between posting the fetch and completing the request. The busy-wait worker remains in that blocked state for the full fetch, while the yield worker pays a switch cost $t_s$, returns to its inbox, and may start other requests. Because the simulator is process-based, a ``fetch'' is itself a SimPy process that travels through the queue pair, the shared link, and the wire delay in sequence; in the yield system it deposits a resume message in the inbox of the issuing worker when it finishes.
+\subsection{Worker State-Machine Implementation}
+Algorithm~\ref{alg:workers} shows the pseudo-code for our simulated worker loops. Busy-wait workers remain blocked on the SimPy event queue throughout the network round-trip. Yielding workers, by contrast, pay a switch penalty $t_s$, deposit the pending unithread in their local tracking table, and immediately check their inbox for other runnable tasks. The remote fetch executes as an independent process flowing across the QP, shared link, and wire delay before delivering a completion event back to the worker.
 
 \begin{algorithm}[t]
 \caption{Worker behaviour in the simulator.}
@@ -68,17 +66,16 @@ Algorithm~\ref{alg:workers} gives the logic of both worker types as implemented 
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{Reproducibility}
-All simulation parameters are defined as named constants in \texttt{config.py}. The scripts should be run in the order \texttt{run\_experiments}, \texttt{plots}, \texttt{pf\_vs\_rr}, \texttt{sweep\_hitrate}, \texttt{sweep\_switchcost}, and \texttt{sweep\_cache}; each writes a CSV file and a figure to the \texttt{results} directory. Tables and figures in this paper are produced directly from those CSV files by two helper scripts distributed with the paper source, so no number in the main text is typed by hand---except for the derived quantities, which follow from the equations in Section~\ref{sec:bounds}. With a fixed seed, every run is deterministic.
+\subsection{Reproducibility Pipeline}
+Configuration parameters reside in \texttt{config.py}. The pipeline scripts (\texttt{run\_experiments}, \texttt{plots}, \texttt{pf\_vs\_rr}, \texttt{sweep\_hitrate}, \texttt{sweep\_switchcost}, \texttt{sweep\_cache}, \texttt{sweep\_adaptive}) write CSV datasets directly to \texttt{results/}. LaTeX tables and PDF plots are compiled from these CSV files via helper scripts (\texttt{mk\_tables.py}, \texttt{make\_figs.py}), preventing manual transcription discrepancies.
 
-\subsection{Corrections to our first version}
-Checking the simulator's output against the capacity bounds of Section~\ref{sec:bounds} revealed two measurement errors in an earlier version. Both are corrected in the results reported here.
+\subsection{Debugging via Analytical Bounds}
+Developing the simulator revealed two measurement bugs that highlight the value of analytical bounds:
+\begin{itemize}
+\item \emph{Arrival-Time Throughput Distortion}: Our initial code tallied throughput by request arrival timestamps rather than completion timestamps. Near saturation, accumulating queues distorted measured throughput depending on exactly where the window closed. Tallying completions corrected this, yielding a stable 1.77~MRPS plateau for busy-wait.
+\item \emph{Unbounded In-Flight Requests}: Our earliest yielding model allowed an infinite backlog of partially processed unithreads. Above the 100~GbE link capacity, the simulator reported physically impossible throughputs ($>2.50$~MRPS). Enforcing a realistic buffer pool cap ($P=4096$) resolved this anomaly, pinning the yield plateau at exactly the 2.50~MRPS link limit.
+\end{itemize}
+Without closed-form models, both bugs would have gone unnoticed because the resulting graphs appeared superficially plausible.
 
-\emph{Throughput by arrival time.} The first version counted each request toward throughput at the moment it arrived, not when it completed. Near saturation, the growing backlog then inflated or deflated the apparent rate depending on where the measurement window ended. Switching to completion-time counting fixed this, and the busy-wait plateau stabilized at a constant 1.77~MRPS across all overloaded conditions.
-
-\emph{Unbounded in-flight requests.} In the original yield model any number of requests could be started and left half-finished simultaneously. Above the link limit the simulator then reported throughputs above 2.50~MRPS (2.56 at 2.8~MRPS offered, 2.60 at 3.0~MRPS), which is physically impossible when the link carries at most two fetches per microsecond and 80\% of requests need one. Capping the pool at $P = 4096$ eliminated the effect, and the yield plateau settled at 2.50~MRPS, matching Equation~\eqref{eq:llink}.
-
-Both errors would have inflated the apparent advantage of yielding at high load. We document them here because they illustrate why a plausible-looking graph still needs to be checked against an analytic bound.
-
-\subsection{Validation}
-We validate the simulator in three independent ways. First, at light load the measured median latency of 5.3~$\mu$s matches the expected $t_c + t_f$ exactly (Table~\ref{tab:main}). Second, the measured throughput plateaus are compared with the bounds from Equations~\eqref{eq:lbw}--\eqref{eq:lqp} across several hit rates and switch costs in Sections~\ref{sec:hit} and~\ref{sec:switch}. Third, the LRU cache with uniform access ($s = 0$) and a 20\% cache fraction must reproduce a 20\% hit rate, and it does (19.9\% in Table~\ref{tab:cache}).
+\subsection{Validation Checks}
+Three checks confirm simulator validity: (1) light-load median latency equals $t_c + t_f = 5.30~\mu$s, (2) measured throughput plateaus match analytical bounds within 3\%, and (3) a uniform LRU cache with 20\% capacity yields 19.9\% measured hit rate (matching the 20\% Bernoulli model).

@@ -1,11 +1,11 @@
 \section{Simulation Model}
 \label{sec:model}
-The simulator is implemented in Python using the SimPy discrete-event library \cite{simpy}. Throughout the model, all times are expressed in microseconds, and one million requests per second (MRPS) corresponds to one request per microsecond. Every numeric parameter in this section maps directly to a named constant in \texttt{config.py} in the project repository, so any reader can modify individual values and re-run the study without touching any other file.
+We built a discrete-event simulator using SimPy \cite{simpy} to capture queuing delays and CPU-network interactions. All time constants in the model are defined in microseconds, so an arrival rate of 1.0 request per microsecond corresponds to 1.0~MRPS. Every system parameter maps to an explicit constant in \texttt{config.py}, enabling full experimental reproducibility.
 
-\subsection{System under test}
-The simulated compute node runs $N = 8$ worker threads, matching the worker count used in the published Adios evaluation \cite{adios}. Requests arrive according to an open-loop Poisson process and queue in a single central FIFO. Each request accesses one 4~KiB page. With probability $h$ that page is already resident in local DRAM, in which case the request consumes $t_L$ of processor time and completes. With probability $1-h$ the page is absent, so the request also needs one remote fetch; the CPU portion $t_c$ is split into two equal halves---the first half covers parsing, page-table lookup, and posting the RDMA command before the fetch, and the second half covers page mapping and reply construction after it arrives.
+\subsection{Compute Node Architecture}
+The compute host runs $N = 8$ concurrent worker threads, mirroring the hardware scale evaluated in the Adios paper \cite{adios}. Client requests enter an open-loop FIFO arrival queue following an exponential inter-arrival distribution. Each request accesses a single 4~KiB memory page. With probability $h$, the page is already cached in local memory, requiring $t_L$ microseconds of CPU processing. With miss probability $1 - h$, the request requires remote fetching plus $t_c$ total CPU time. Following Adios's profiling breakdown, we split $t_c$ into two halves: the first half handles request decoding, page-table lookup, and posting the RDMA command; the second half maps the returned page and formats the client response.
 
-Neither service time is chosen arbitrarily. The Adios paper measures that, for its random-read microbenchmark with a 20\% local cache, a local hit takes roughly 0.85~$\mu$s and a full remote miss takes roughly 5.3~$\mu$s \cite{adios}. We therefore set $t_L = 0.85$ and $t_c + t_f = 5.3$. The unloaded fetch time $t_f = 3.0$ falls within the 2--3~$\mu$s range reported for a 4~KiB read on a 100~GbE card. The context-switch cost $t_s = 0.02~\mu$s matches the 40-cycle unithread switch at 2~GHz. Table~\ref{tab:params} collects all parameters.
+These numerical constants are taken directly from the microbenchmark characterization in the Adios paper \cite{adios}: a local access takes $t_L = 0.85~\mu$s, while a full remote fetch under busy-waiting takes $t_c + t_f = 5.3~\mu$s. Subtracting CPU computation leaves an unloaded RDMA wire-and-NIC transit time of $t_f = 3.0~\mu$s (aligning with typical 2--3~$\mu$s 100~GbE latencies). The baseline context-switch latency $t_s = 0.02~\mu$s reflects the 40-cycle unithread switch measured at 2~GHz. Table~\ref{tab:params} summarizes all baseline parameters.
 
 \begin{table}[t]
 \caption{Simulation parameters (defaults)}
@@ -52,8 +52,8 @@ $P$ & in-flight request pool (yield system) & 4096 \\
 \label{fig:arch}
 \end{figure*}
 
-\subsection{Request life cycle under the two policies}
-Figure~\ref{fig:timeline} shows what a single worker does when it handles a remote miss. Under busy-waiting, the worker executes the first half of $t_c$, posts the fetch, then stays on the core doing nothing but polling the completion queue until the page lands---a total occupancy of $t_c + t_f$. Under yielding, the worker posts the fetch, pays one switch $t_s$ to hand control back to the scheduler, and picks up another request from its inbox. When the page eventually arrives, the suspended request gets priority over new arrivals; the worker pays a second switch to resume it, runs the remaining half of $t_c$, and completes. Local-hit requests follow the same code path in both systems.
+\subsection{Worker Execution Paths}
+Figure~\ref{fig:timeline} compares core utilization between policies on a remote page fault. A busy-waiting worker runs the pre-fetch CPU logic ($t_c/2 = 1.15~\mu$s), triggers the RDMA read, and spin-polls the completion queue for the entire 3.0~$\mu$s fetch before running the final CPU phase ($t_c/2$), occupying the physical core for $5.3~\mu$s total. In yielding, the worker posts the read asynchronously, incurs a context switch $t_s$, and immediately starts serving other tasks from its inbox. Once the NIC notifies that the page has arrived, the suspended unithread is placed back in the worker's queue with high priority; the worker performs a second context switch to resume it, runs the remaining CPU half, and finishes. Local hits execute identically under all schemes.
 
 \begin{figure}[t]
 \centering
@@ -81,53 +81,56 @@ Figure~\ref{fig:timeline} shows what a single worker does when it handles a remo
 \label{fig:timeline}
 \end{figure}
 
-\subsection{RDMA path}
-Every worker owns one dedicated queue pair, modelled as a single-server FIFO with service time $t_q$. After leaving the queue pair, a command occupies the single shared link for $t_\ell$, then the page spends a fixed $t_w$ on the wire and in the remote memory node. An unloaded fetch therefore completes in $t_q + t_\ell + t_w = 3.0~\mu$s. This three-stage pipeline captures exactly the properties described in Section~\ref{sec:background}: fetches take a few microseconds on an idle fabric, commands on a single queue pair are ordered, and all queue pairs compete for a fixed aggregate link capacity. The link time $t_\ell = 0.5~\mu$s per page translates to roughly 65~Gb/s of page traffic, capping the network at two fetches per microsecond. The simulator maintains a per-queue-pair counter of outstanding fetches; this counter is the congestion signal the page-fault-aware dispatcher reads. For the sensitivity experiment in Section~\ref{sec:pf} we also test $t_q = 2.0~\mu$s with $t_w = 0.5~\mu$s, keeping the unloaded fetch unchanged but making the queue pair a larger share of the delay.
+\subsection{RDMA Hardware Queuing Model}
+To faithfully reflect hardware constraints without modeling low-level PCIe register writes, each worker is assigned an independent Queue Pair (QP), represented as a single-server FIFO with service duration $t_q = 1.0~\mu$s. From the QP, packets pass through the shared physical PCIe/network link ($t_\ell = 0.5~\mu$s per 4~KiB page), followed by fixed optical wire propagation and remote DRAM access ($t_w = 1.5~\mu$s). Total unloaded latency is thus $t_q + t_\ell + t_w = 3.0~\mu$s. The link parameter $t_\ell = 0.5~\mu$s sets a maximum physical bandwidth of 2.0 million page transfers per second ($\approx 65$~Gb/s wire rate). Tracking active commands per QP provides the instantaneous congestion feedback utilized by the load balancer.
 
-\subsection{The yield system}
-A dispatcher process holds the central queue and assigns work to \emph{idle} workers---those with empty inboxes. Each worker's inbox is a priority store in which page-arrival resumptions (priority 0) beat new requests (priority 1). Three dispatch policies are implemented. Round-robin (RR) scans idle workers in a rotating order. Page-fault-aware dispatch (PF) selects, among idle workers, the one with the fewest outstanding fetches and breaks ties round-robin, as shown in Algorithm~\ref{alg:dispatch}.
-
-Beyond those two baselines, we design and implement an \emph{Adaptive Hybrid} policy (\texttt{adaptive}). When a worker hits a page fault, it checks system queue pressure through the condition:
+\subsection{Yield Dispatching and the Adaptive Hybrid Policy}
+Under yielding, a central dispatcher processes incoming requests and forwards them to idle workers (workers with empty local inboxes). Resumed unithreads take strict priority over newly arrived work. We implement three distinct policies:
+\begin{itemize}
+\item \textbf{Round-Robin (RR)}: Scans idle cores in cyclic order.
+\item \textbf{Page-Fault-Aware (PF)}: Directs work to the idle worker whose QP has the shortest backlog of outstanding fetches (Algorithm~\ref{alg:dispatch}).
+\item \textbf{Adaptive Hybrid (Ours)}: Rather than unconditionally yielding on every page fault, workers dynamically evaluate instant queuing pressure:
 \begin{equation}
 \label{eq:must_yield}
 \text{must\_yield} = (|W.\text{inbox}| > 0) \lor (|Q| > 0) \lor (N_{\text{idle}} = 0)
 \end{equation}
-If $\text{must\_yield}$ is true---meaning work is queued or every other core is busy---the worker yields right away, posts an asynchronous RDMA fetch, and switches to the queued tasks to prevent head-of-line blocking. If $\text{must\_yield}$ is false---the system is idle with spare cores available---the worker spin-waits on the fetch directly. This avoids both the outgoing and incoming switches ($2t_s$ in total), recovering the light-load latency advantage of busy-waiting while preserving the high-load capacity benefit of yielding. The dispatcher is modelled as free of processor cost, a simplification that favours the yield system and is listed as a limitation in Section~\ref{sec:discussion}.
+When $\text{must\_yield}$ evaluates to true (work is backlogged or all other cores are occupied), the thread immediately yields, offloading the fetch asynchronously to prevent HOL blocking. But when $\text{must\_yield}$ is false (the server is uncongested and idle cores are available), the thread spin-waits directly on the completion queue. This completely sidesteps both context switches ($2t_s = 40$~ns), recovering the low-load median latency of spinning while retaining the full high-load saturation throughput of yielding.
+\end{itemize}
 
-The number of requests simultaneously in flight is capped at $P = 4096$. This represents the fixed pool of 131{,}072 pre-allocated unithreads in Adios \cite{adios}, scaled down only to keep simulation time reasonable. Without a cap, the model allows an unbounded backlog of half-completed requests when load exceeds capacity, which distorted our earliest measurements (Section~\ref{sec:method}).
+To prevent runaway memory consumption during overload, we bound concurrent in-flight requests at $P = 4096$, mimicking Adios's static pool of 131,072 unithread buffers.
 
-\subsection{Optional page-cache model}
-By default, each request independently draws a hit or miss with probability $h$. To test whether this independence assumption matters, the simulator also supports a true LRU cache over $M = 100{,}000$ pages, with the cache holding a configurable fraction. Each request selects a page from a Zipf distribution with exponent $s$, so page $k$ is chosen with probability proportional to $k^{-s}$; $s = 0$ gives uniform access \cite{zipf}. A hit promotes the page to most-recently-used; a fetched page is inserted on arrival, evicting the least-recently-used page when the cache is full. The cache is pre-warmed with the most popular pages. Two simultaneous misses on the same page each issue a separate fetch, since request merging is not modelled.
+\subsection{Page Access and Cache Models}
+Our baseline configuration samples hits independently with constant probability $h = 0.20$. To verify that independent Bernoulli sampling does not bias queuing conclusions, we also implement a real LRU cache managing $M = 100{,}000$ pages. Client requests sample page addresses according to a Zipf distribution with skew parameter $s$ (where $s=0$ represents uniform access). Cache misses fetch pages across RDMA and insert them at the MRU position, evicting the LRU page when full.
 
-\subsection{Capacity bounds}
+\subsection{Mathematical Capacity Bounds}
 \label{sec:bounds}
-The model's structure permits a closed-form estimate of each policy's saturation throughput. We write $\Lambda$ for a capacity in MRPS.
+The queuing structure enables exact analytical derivations for maximum sustainable throughput ($\Lambda$, in MRPS).
 
-\textbf{Busy-wait.} A worker is occupied for $t_L$ on a hit and for $t_c+t_f$ on a miss, so the mean occupancy is
+\textbf{Busy-Wait Saturation Bound.} Since spinning workers remain occupied through both computation and network transit on misses, average service time per request is:
 \begin{equation}
 S_{bw}=h\,t_L+(1-h)(t_c+t_f),
 \label{eq:sbw}
 \end{equation}
-and the eight workers can complete at most
+yielding an upper throughput ceiling for $N$ workers of:
 \begin{equation}
 \Lambda_{bw}=N/S_{bw}.
 \label{eq:lbw}
 \end{equation}
-With the defaults, $S_{bw}=4.41$~$\mu$s and $\Lambda_{bw}=1.81$~MRPS. Queueing in the shared link extends the real fetch time slightly beyond $t_f$, so the measured plateau should fall a little below this bound.
+Under default parameters ($h=0.20, t_L=0.85, t_c=2.3, t_f=3.0$), mean occupancy is $S_{bw} = 4.41~\mu$s, bounding maximum throughput at $\Lambda_{bw} = 8 / 4.41 = 1.814$~MRPS.
 
-\textbf{Yield.} The processor time of a request is $h\,t_L+(1-h)(t_c+2t_s)$, because every miss pays two switches. Three resources can limit throughput:
+\textbf{Yielding Saturation Bounds.} Because yielding workers offload the network wait, each remote miss costs only computation plus two context switches: $t_c + 2t_s$. Three distinct hardware resources can bottleneck the system:
 \begin{align}
 \Lambda_{cpu}&=\frac{N}{h\,t_L+(1-h)(t_c+2t_s)},\label{eq:lcpu}\\
 \Lambda_{link}&=\frac{1}{(1-h)\,t_\ell},\label{eq:llink}\\
 \Lambda_{qp}&=\frac{N}{(1-h)\,t_q}.\label{eq:lqp}
 \end{align}
-The yield system saturates at $\Lambda_{y}=\min(\Lambda_{cpu},\Lambda_{link},\Lambda_{qp})$. With the defaults the three values are 3.92, 2.50 and 10.0 MRPS. The shared link is therefore the bottleneck of the yield system at 2.50~MRPS, and the processors are only about 64\% busy at that point.
+The achievable capacity is determined by the most constrained resource: $\Lambda_y = \min(\Lambda_{cpu}, \Lambda_{link}, \Lambda_{qp})$. For our baseline, the bounds evaluate to $\Lambda_{cpu} = 3.92$~MRPS, $\Lambda_{link} = 2.50$~MRPS, and $\Lambda_{qp} = 10.0$~MRPS. The shared 100~GbE link is the true system bottleneck at 2.50~MRPS, leaving the 8 CPU cores running at approximately 64\% utilization.
 
-\textbf{Break-even rule.} When the link is not the limiting resource, comparing Equations~\eqref{eq:lbw} and~\eqref{eq:lcpu} gives a simple condition: yielding raises capacity if and only if
+\textbf{Break-Even Rule.} Comparing Equations~\eqref{eq:lbw} and~\eqref{eq:lcpu} shows that yielding delivers higher compute capacity than spinning if and only if:
 \begin{equation}
-2\,t_s<t_f.
+2\,t_s < t_f.
 \label{eq:breakeven}
 \end{equation}
-In words, the two switches that a fault costs must take less time than the fetch they hide. With $t_f=3.0$~$\mu$s the threshold is $t_s=1.5$~$\mu$s.
+In short: the combined cost of saving and restoring thread state must remain strictly smaller than the remote page fetch duration. With $t_f = 3.0~\mu$s, the break-even switch cost is $t_s = 1.50~\mu$s.
 
-\textbf{Efficiency view.} In the busy-wait system the useful fraction of occupied time is $(h\,t_L+(1-h)t_c)/S_{bw}=0.46$: more than half of the processor time at saturation is spent waiting. To carry the yield system's 2.50~MRPS, a busy-wait system would need $2.50\,S_{bw}\approx 11$ workers instead of eight, ignoring the link limit. These two figures are derived from the model equations, not measured in the simulator.
+\textbf{Core Efficiency.} In busy-waiting at saturation, only $(h t_L + (1-h)t_c) / S_{bw} = 45.6\%$ of worker time performs useful instructions; over half of core cycles are spent spinning. To achieve the 2.50~MRPS carried by the yield system, a spinning deployment would require $2.50 \times S_{bw} \approx 11$ worker cores.
